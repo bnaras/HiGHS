@@ -3,6 +3,8 @@
 #include "ipm/ipx/control.h"
 #include <iostream>
 
+#include "io/r_io.h"
+
 namespace ipx {
 
 Control::Control() {
@@ -119,7 +121,7 @@ void Control::ResetTimer() {
 void Control::MakeStream() {
     output_.clear();
     if (parameters_.display)
-        output_.add(std::cout);
+        output_.add(HIGHS_COUT);
     if (logfile_.is_open())
         output_.add(logfile_);
 }
