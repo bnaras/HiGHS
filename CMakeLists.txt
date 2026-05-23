@@ -573,6 +573,12 @@ if(ZLIB AND NOT TARGET ZLIB::ZLIB)
   find_package(ZLIB 1.2.3)
 endif()
 
+# HIGHS_R_NO_DOC_INSTALL (off by default => upstream-identical): when the R
+# `Uno` package builds HiGHS purely for its static library, it sets this to skip
+# installing HiGHS's doc files (README/LICENSE/AUTHORS/CITATION.cff/...).  Those
+# files are irrelevant to the consumed libhighs.a, and shipping CITATION.cff into
+# share/doc trips R CMD check's "CITATION file in a non-standard place" NOTE.
+if (NOT HIGHS_R_NO_DOC_INSTALL)
 if (PYTHON_BUILD_SETUP OR CMAKE_INSTALL_DOCDIR STREQUAL "" OR NOT BUILD_CXX)
   install(FILES
       README.md
@@ -590,6 +596,7 @@ else()
       FEATURES.md
       DESTINATION ${CMAKE_INSTALL_DOCDIR})
 endif()
+endif() # HIGHS_R_NO_DOC_INSTALL
 
 # Set default generator based on platform
 if(WIN32)
