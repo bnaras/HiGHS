@@ -17,12 +17,13 @@
  *     trivially mergeable.
  *
  *   - When HIGHS_R_PRINT IS defined (the CVXR `Uno` R-package build, which
- *     passes -DHIGHS_R_PRINT and force-includes this header via the compiler
- *     `-include` flag for BOTH C and C++ TUs), every console write is routed to
- *     R's console through Rprintf / REprintf, and the libc symbols `stdout`
- *     (___stdoutp), `printf` (_printf / _puts / _putchar) and `std::cout` /
- *     `std::cerr` (the C++ stream objects) are never referenced.  This is what
- *     lets `R CMD check`'s "checking compiled code" pass for a bundled HiGHS.
+ *     passes -DHIGHS_R_PRINT for BOTH C and C++ TUs; HConfig.h then includes
+ *     this header, so it is reached MID-translation-unit, not force-included
+ *     first), every console write is routed to R's console through Rprintf /
+ *     REprintf, and the libc symbols `stdout` (___stdoutp), `printf` (_printf /
+ *     _puts / _putchar) and `std::cout` / `std::cerr` (the C++ stream objects)
+ *     are never referenced.  This is what lets `R CMD check`'s "checking
+ *     compiled code" pass for a bundled HiGHS.
  *
  * `printf` and `stdout` are redirected with macros (HiGHS has 600+ debug
  * `printf` sites and the `stdout` token is both a write target and a console
@@ -31,7 +32,14 @@
  * two compiled files that use them (`ipm/ipx/control.cc`, `test_kkt/DevKkt.cpp`)
  * are edited to use HIGHS_COUT / HIGHS_CERR instead.
  *
- * `stdout` REDIRECTION -- two portable strategies, selected per platform:
+ * `stdout` REDIRECTION -- two portable strategies.  Which one applies is chosen
+ * by a COMPILE PROBE at configure time (inst/build_highs.sh), not by a platform
+ * #ifdef: glibc's feature guard on fopencookie changed from __USE_GNU to
+ * __USE_MISC between 2.36 and 2.39, so whether it is visible depends on the
+ * glibc VERSION and on -D_GNU_SOURCE, neither of which the preprocessor can
+ * test for.  The probe sets HIGHS_R_HAVE_FUNOPEN / HIGHS_R_HAVE_FOPENCOOKIE /
+ * HIGHS_R_NO_STREAM_REDIRECT; absent those, the platform guesses further down
+ * are used so upstream builds are unaffected.  The strategies:
  *
  *   (A) funopen / fopencookie (macOS, *BSD, glibc): `stdout` is remapped to a
  *       REAL FILE* that forwards every write to Rprintf.  Because it is a real
@@ -82,8 +90,15 @@
 #define R_NO_REMAP
 #endif
 
-/* fopencookie (glibc) needs _GNU_SOURCE before any libc header.  This header is
- * force-included first in the R build, so defining it here is in time. */
+/* On glibc up to 2.36, fopencookie is behind __USE_GNU and so needs
+ * _GNU_SOURCE defined before the FIRST libc header in the translation unit.
+ * Defining it here is only best-effort -- it works when this header genuinely
+ * comes first, and is a no-op when it does not (the cuPDLP C sources reach
+ * r_io.h via HConfig.h, eleven lines after their own <stdio.h>).  The R package
+ * build therefore supplies -D_GNU_SOURCE on the command line, where it always
+ * precedes every #include, and decides whether it is needed by compiling
+ * tools/r_io_probe_fopencookie.c (see inst/build_highs.sh).  Do not rely on the
+ * define below to make fopencookie visible; rely on the probe. */
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1
 #endif
@@ -104,7 +119,35 @@
 #include <stdlib.h>
 #include <string.h>
 #endif
-#if defined(__linux__)
+/* ----- which stdout-redirection strategy is available here? -----------------
+ * A build system that has probed the platform (the R package: see
+ * inst/build_highs.sh) passes exactly one of HIGHS_R_HAVE_FUNOPEN,
+ * HIGHS_R_HAVE_FOPENCOOKIE, or HIGHS_R_NO_STREAM_REDIRECT, and additionally
+ * -D_GNU_SOURCE when that is what makes fopencookie visible.
+ *
+ * A probe is used because no preprocessor test can decide this: glibc guards
+ * fopencookie with __USE_GNU (needs _GNU_SOURCE) up to 2.36 and with __USE_MISC
+ * (on by default) from 2.39, while __USE_MISC is set in both -- so keying off
+ * __GLIBC__ or __USE_MISC selects the fopencookie branch on a glibc 2.36 C
+ * translation unit where the type is not actually visible, and the build fails
+ * to compile instead of falling through to the sentinel.
+ *
+ * When nothing was probed -- upstream and standalone HiGHS builds, which do not
+ * define HIGHS_R_PRINT and never reach this code -- fall back to the platform
+ * guesses so behavior is unchanged and the fork stays mergeable. */
+#if !defined(HIGHS_R_HAVE_FUNOPEN) && !defined(HIGHS_R_HAVE_FOPENCOOKIE) && \
+    !defined(HIGHS_R_NO_STREAM_REDIRECT)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+    defined(__OpenBSD__) || defined(__DragonFly__)
+#define HIGHS_R_HAVE_FUNOPEN 1
+#elif defined(__GLIBC__)
+#define HIGHS_R_HAVE_FOPENCOOKIE 1
+#else
+#define HIGHS_R_NO_STREAM_REDIRECT 1
+#endif
+#endif
+
+#if defined(HIGHS_R_HAVE_FOPENCOOKIE)
 #include <sys/types.h> /* ssize_t for the fopencookie write callback */
 #endif
 
@@ -122,8 +165,7 @@ extern "C" {
  * Declared `static inline` so it is shareable from both C and C++ TUs without a
  * separate definition, and does not warn when a TU includes the header but only
  * uses `printf` (not `stdout`). */
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
-    defined(__OpenBSD__) || defined(__DragonFly__)
+#if defined(HIGHS_R_HAVE_FUNOPEN)
 
 static int highs_r_write_fn(void* cookie, const char* buf, int n) {
   (void)cookie;
@@ -139,7 +181,7 @@ static inline FILE* highs_r_rconsole(void) {
   return f;
 }
 
-#elif defined(__GLIBC__)
+#elif defined(HIGHS_R_HAVE_FOPENCOOKIE)
 
 static ssize_t highs_r_write_fn(void* cookie, const char* buf, size_t n) {
   (void)cookie;
