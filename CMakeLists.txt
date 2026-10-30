@@ -915,9 +915,14 @@ else(FAST_BUILD)
 
 endif()
 
+# HIGHS_R_NO_EXTERN (off by default => upstream-identical): the R `Uno` package
+# builds HiGHS with HIPO off and links only libhighs.a, so it needs nothing from
+# extern/, which would otherwise build a separate (by default shared)
+# highs_extras library. libhighs then finds no extras library at runtime, the
+# same state as the R `highs` package (whose patch_min.R P5 drops extern/).
 if (HIPO_PYTHON)
   add_subdirectory(highspy)
-else()
+elseif (NOT HIGHS_R_NO_EXTERN)
   add_subdirectory(extern)
 endif()
 
